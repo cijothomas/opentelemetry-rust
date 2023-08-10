@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use opentelemetry_api::KeyValue;
 use opentelemetry_appender_tracing::layer;
 use opentelemetry_sdk::{
     logs::{Config, LoggerProvider},
     Resource,
 };
+use opentelemetry_user_events_logs::{ExporterConfig, ReentrantLogProcessor};
 use tracing::error;
 use tracing_subscriber::{prelude::*, Layer};
 
@@ -38,16 +41,36 @@ where
     }
 }
 
-fn main() {
-    // LoggerProvider without any exporter.
-    let provider: LoggerProvider = LoggerProvider::builder()
+fn init_logger_with_user_event_exporter() -> LoggerProvider {
+    let exporter_config = ExporterConfig {
+        default_keyword: 1,
+        keywords_map: HashMap::new(),
+    };
+    let reenterant_processor = ReentrantLogProcessor::new("test", None, exporter_config);
+
+    LoggerProvider::builder()
         .with_config(
             Config::default().with_resource(Resource::new(vec![KeyValue::new(
                 "service.name",
-                "log-appender-tracing-example",
+                "log-stress-user-event",
+            )])))
+        .with_log_processor(reenterant_processor)
+        .build()
+}
+
+fn init_logger_no_exporter() -> LoggerProvider {
+    LoggerProvider::builder()
+        .with_config(
+            Config::default().with_resource(Resource::new(vec![KeyValue::new(
+                "service.name",
+                "log-stress-no-exporter",
             )])),
         )
-        .build();
+        .build()
+}
+
+fn main() {
+    let provider = init_logger_with_user_event_exporter();
 
     // Use the OpenTelemetryTracingBridge to test the throughput of the appender-tracing.
     let layer = layer::OpenTelemetryTracingBridge::new(&provider);
