@@ -334,25 +334,25 @@ impl opentelemetry_sdk::export::logs::LogExporter for UserEventsExporter {
 
     #[cfg(feature = "logs_level_enabled")]
     fn event_enabled(&self, level: Severity, _target: &str, name: &str) -> bool {
-        let (found, keyword) = if self.exporter_config.keywords_map.is_empty() {
-            (true, self.exporter_config.default_keyword)
-        } else {
-            // TBD - target is not used as of now for comparison.
-            match self.exporter_config.get_log_keyword(name) {
-                Some(x) => (true, x),
-                _ => (false, 0),
-            }
-        };
-        if !found {
-            return false;
-        }
-        let es = self
-            .provider
-            .find_set(self.get_severity_level(level), keyword);
-        match es {
-            Some(x) => x.enabled(),
-            _ => false,
-        };
+        // let (found, keyword) = if self.exporter_config.keywords_map.is_empty() {
+        //     (true, self.exporter_config.default_keyword)
+        // } else {
+        //     // TBD - target is not used as of now for comparison.
+        //     match self.exporter_config.get_log_keyword(name) {
+        //         Some(x) => (true, x),
+        //         _ => (false, 0),
+        //     }
+        // };
+        // if !found {
+        //     return false;
+        // }
+        // let es = self
+        //     .provider
+        //     .find_set(self.get_severity_level(level), keyword);
+        // match es {
+        //     Some(x) => x.enabled(),
+        //     _ => false,
+        // };
         false
     }
 }
