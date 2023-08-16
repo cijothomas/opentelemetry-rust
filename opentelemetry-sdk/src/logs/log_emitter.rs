@@ -55,7 +55,7 @@ impl opentelemetry_api::logs::LoggerProvider for LoggerProvider {
     }
 
     fn library_logger(&self, library: Arc<InstrumentationLibrary>) -> Self::Logger {
-        Logger::new(library, Arc::downgrade(&self.inner))
+        Logger::new(library, self.inner.clone())
     }
 }
 
@@ -179,23 +179,18 @@ impl Builder {
 /// [`LogRecord`]: opentelemetry_api::logs::LogRecord
 pub struct Logger {
     instrumentation_lib: Arc<InstrumentationLibrary>,
-    provider: Weak<LoggerProviderInner>,
+    provider: Arc<LoggerProviderInner>,
 }
 
 impl Logger {
     pub(crate) fn new(
         instrumentation_lib: Arc<InstrumentationLibrary>,
-        provider: Weak<LoggerProviderInner>,
+        provider: Arc<LoggerProviderInner>,
     ) -> Self {
         Logger {
             instrumentation_lib,
             provider,
         }
-    }
-
-    /// LoggerProvider associated with this logger.
-    pub fn provider(&self) -> Option<LoggerProvider> {
-        self.provider.upgrade().map(LoggerProvider::new)
     }
 
     /// Instrumentation library information of this logger.
@@ -207,16 +202,12 @@ impl Logger {
 impl opentelemetry_api::logs::Logger for Logger {
     /// Emit a `LogRecord`.
     fn emit(&self, record: LogRecord) {
-        let provider = match self.provider() {
-            Some(provider) => provider,
-            None => return,
-        };
         let trace_context = Context::map_current(|cx| {
             cx.has_active_span()
                 .then(|| TraceContext::from(cx.span().span_context()))
         });
-        let config = provider.config();
-        for processor in provider.log_processors() {
+        let config = &self.provider.config;
+        for processor in &self.provider.processors {
             let mut record = record.clone();
             if let Some(ref trace_context) = trace_context {
                 record.trace_context = Some(trace_context.clone())
@@ -232,13 +223,8 @@ impl opentelemetry_api::logs::Logger for Logger {
 
     #[cfg(feature = "logs_level_enabled")]
     fn event_enabled(&self, level: Severity, target: &str) -> bool {
-        let provider = match self.provider() {
-            Some(provider) => provider,
-            None => return false,
-        };
-
         let mut enabled = false;
-        for processor in provider.log_processors() {
+        for processor in &self.provider.processors {
             enabled = enabled
                 || processor.event_enabled(
                     level,

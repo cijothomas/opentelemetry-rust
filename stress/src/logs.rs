@@ -58,7 +58,7 @@ impl LogProcessor for NoOpLogProcessor {
         _target: &str,
         _name: &str,
     ) -> bool {
-        true
+        false
     }
 }
 
