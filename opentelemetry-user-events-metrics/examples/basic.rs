@@ -16,8 +16,8 @@ fn init_metrics(exporter: MetricsExporter) -> MeterProvider {
     MeterProvider::builder()
         .with_resource(Resource::new(vec![
             KeyValue::new("service.name", "metric-demo"),
-            KeyValue::new("_microsoft_metrics_account", "exemplardemo"),
-            KeyValue::new("_microsoft_metrics_namespace", "cithomaslinux"),
+            KeyValue::new("_microsoft_metrics_account", "genevaoverlake"),
+            KeyValue::new("_microsoft_metrics_namespace", "cijo-wsl-box"),
         ]))
         .with_reader(reader)
         .build()
