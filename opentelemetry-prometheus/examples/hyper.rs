@@ -13,6 +13,7 @@ use prometheus::{Encoder, Registry, TextEncoder};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::SystemTime;
+use sysinfo::{NetworkExt, NetworksExt, ProcessExt, System, SystemExt};
 
 static HANDLER_ALL: Lazy<[KeyValue; 1]> = Lazy::new(|| [KeyValue::new("handler", "all")]);
 
@@ -32,7 +33,7 @@ async fn serve_req(
             let metric_families = state.registry.gather();
             encoder.encode(&metric_families, &mut buffer).unwrap();
             state
-                .http_body_gauge
+                .http_response_size
                 .record(buffer.len() as u64, HANDLER_ALL.as_ref());
 
             Response::builder()
@@ -41,27 +42,36 @@ async fn serve_req(
                 .body(Body::from(buffer))
                 .unwrap()
         }
-        (&Method::GET, "/") => Response::builder()
-            .status(200)
-            .body(Body::from("Hello World"))
-            .unwrap(),
-        _ => Response::builder()
-            .status(404)
-            .body(Body::from("Missing Page"))
-            .unwrap(),
+        (&Method::GET, "/") => {
+            state.http_req_histogram.record(
+                request_start.elapsed().map_or(0.0, |d| d.as_secs_f64()),
+                [KeyValue::new("status_code", "200")].as_ref(),
+            );
+            Response::builder()
+                .status(200)
+                .body(Body::from("Hello World"))
+                .unwrap()
+        }
+        _ => {
+            state.http_req_histogram.record(
+                request_start.elapsed().map_or(0.0, |d| d.as_secs_f64()),
+                [KeyValue::new("status_code", "404")].as_ref(),
+            );
+
+            Response::builder()
+                .status(404)
+                .body(Body::from("Missing Page"))
+                .unwrap()
+        }
     };
 
-    state.http_req_histogram.record(
-        request_start.elapsed().map_or(0.0, |d| d.as_secs_f64()),
-        &[],
-    );
     Ok(response)
 }
 
 struct AppState {
     registry: Registry,
     http_counter: Counter<u64>,
-    http_body_gauge: Histogram<u64>,
+    http_response_size: Histogram<u64>,
     http_req_histogram: Histogram<f64>,
 }
 
@@ -73,20 +83,40 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .build()?;
     let provider = MeterProvider::builder().with_reader(exporter).build();
 
+    let mut sys = System::new_all();
+    sys.refresh_all();
     let meter = provider.meter("hyper-example");
+    let gauge_system_memory = meter
+        .u64_observable_gauge("system_memory")
+        .with_description("System memory")
+        .with_unit(Unit::new("by"))
+        .init();
+
+    meter.register_callback(&[gauge_system_memory.as_any()], move |observer| {
+        observer.observe_u64(
+            &gauge_system_memory,
+            sys.total_memory(),
+            [
+                KeyValue::new("mykey1", "myvalue1"),
+                KeyValue::new("mykey2", "myvalue2"),
+            ]
+            .as_ref(),
+        )
+    })?;
+
     let state = Arc::new(AppState {
         registry,
         http_counter: meter
             .u64_counter("http_requests_total")
             .with_description("Total number of HTTP requests made.")
             .init(),
-        http_body_gauge: meter
-            .u64_histogram("example.http_response_size")
+        http_response_size: meter
+            .u64_histogram("http_response_size")
             .with_unit(Unit::new("By"))
             .with_description("The metrics HTTP response sizes in bytes.")
             .init(),
         http_req_histogram: meter
-            .f64_histogram("example.http_request_duration")
+            .f64_histogram("http_request_duration")
             .with_unit(Unit::new("ms"))
             .with_description("The HTTP request latencies in milliseconds.")
             .init(),

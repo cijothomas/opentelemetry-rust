@@ -30,6 +30,7 @@ protobuf = "2.14"
 opentelemetry-semantic-conventions = { path = "../opentelemetry-semantic-conventions" }
 hyper = { version = "0.14", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
+sysinfo = "0.29.9"
 
 [features]
 prometheus-encoding = []
