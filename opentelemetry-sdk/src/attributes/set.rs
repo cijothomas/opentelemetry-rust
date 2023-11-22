@@ -110,7 +110,7 @@ pub struct AttributeSet(Vec<HashKeyValue>);
 impl From<&[KeyValue]> for AttributeSet {
     fn from(values: &[KeyValue]) -> Self {
         let mut seen_keys = HashSet::with_capacity(values.len());
-        let mut vec = values
+        let vec = values
             .iter()
             .rev()
             .filter_map(|kv| {
@@ -121,7 +121,7 @@ impl From<&[KeyValue]> for AttributeSet {
                 }
             })
             .collect::<Vec<_>>();
-        vec.sort_unstable();
+        // vec.sort_unstable();
 
         AttributeSet(vec)
     }
