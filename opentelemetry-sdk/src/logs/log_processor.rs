@@ -47,6 +47,14 @@ pub trait LogProcessor: Send + Sync + Debug {
     fn force_flush(&self) -> LogResult<()>;
     /// Shuts down the processor.
     fn shutdown(&mut self) -> LogResult<()>;
+    /// Set the resource associated with the provider. If the processor intends
+    /// to use the resource, it should store it during this call. Resource will
+    /// not be passed as part of LogData. Resource is immutable and can be
+    /// stored as is.
+    /// It is common for exporting processors to pass this to exporters using
+    /// exporter's set_resource method.
+    fn set_resource(&mut self, _resource: crate::Resource) {}
+
     #[cfg(feature = "logs_level_enabled")]
     /// Check if logging is enabled
     fn event_enabled(&self, level: Severity, target: &str, name: &str) -> bool;
@@ -78,6 +86,12 @@ impl LogProcessor for SimpleLogProcessor {
             .and_then(|mut exporter| futures_executor::block_on(exporter.export(vec![data])));
         if let Err(err) = result {
             global::handle_error(err);
+        }
+    }
+
+    fn set_resource(&mut self, resource: crate::Resource) {
+        if let Ok(mut exporter) = self.exporter.lock() {
+            exporter.set_resource(resource);
         }
     }
 
@@ -313,7 +327,7 @@ pub struct BatchConfigBuilder {
 
 impl Default for BatchConfigBuilder {
     /// Create a new [`BatchConfigBuilder`] initialized with default batch config values as per the specs.
-    /// The values are overriden by environment variables if set.
+    /// The values are overridden by environment variables if set.
     /// The supported environment variables are:
     /// * `OTEL_BLRP_MAX_QUEUE_SIZE`
     /// * `OTEL_BLRP_SCHEDULE_DELAY`

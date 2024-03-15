@@ -1,5 +1,4 @@
 //! Log exporters
-use crate::Resource;
 use async_trait::async_trait;
 #[cfg(feature = "logs_level_enabled")]
 use opentelemetry::logs::Severity;
@@ -7,7 +6,7 @@ use opentelemetry::{
     logs::{LogError, LogRecord, LogResult},
     InstrumentationLibrary,
 };
-use std::{borrow::Cow, fmt::Debug};
+use std::fmt::Debug;
 
 /// `LogExporter` defines the interface that log exporters should implement.
 #[async_trait]
@@ -16,8 +15,13 @@ pub trait LogExporter: Send + Sync + Debug {
     async fn export(&mut self, batch: Vec<LogData>) -> LogResult<()>;
     /// Shuts down the exporter.
     fn shutdown(&mut self) {}
+    /// Set the resource associated with the provider. If the exporter intends
+    /// to use the resource, it should store it during this call. Resource will
+    /// not be passed as part of LogData. Resource is immutable and can be
+    /// stored as is.
+    fn set_resource(&mut self, _resource: crate::Resource) {}
     #[cfg(feature = "logs_level_enabled")]
-    /// Chek if logs are enabled.
+    /// Check if logs are enabled.
     fn event_enabled(&self, _level: Severity, _target: &str, _name: &str) -> bool {
         true
     }
@@ -29,8 +33,6 @@ pub trait LogExporter: Send + Sync + Debug {
 pub struct LogData {
     /// Log record
     pub record: LogRecord,
-    /// Resource for the emitter who produced this `LogData`.
-    pub resource: Cow<'static, Resource>,
     /// Instrumentation details for the emitter who produced this `LogData`.
     pub instrumentation: InstrumentationLibrary,
 }

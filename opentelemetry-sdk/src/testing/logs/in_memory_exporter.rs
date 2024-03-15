@@ -1,4 +1,7 @@
-use crate::export::logs::{LogData, LogExporter};
+use crate::{
+    export::logs::{LogData, LogExporter},
+    Resource,
+};
 use async_trait::async_trait;
 use opentelemetry::logs::{LogError, LogResult};
 use std::sync::{Arc, Mutex};
@@ -36,6 +39,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Debug)]
 pub struct InMemoryLogsExporter {
     logs: Arc<Mutex<Vec<LogData>>>,
+    resource: Arc<Mutex<Resource>>,
 }
 
 impl Default for InMemoryLogsExporter {
@@ -91,6 +95,7 @@ impl InMemoryLogsExporterBuilder {
     pub fn build(&self) -> InMemoryLogsExporter {
         InMemoryLogsExporter {
             logs: Arc::new(Mutex::new(Vec::new())),
+            resource: Arc::new(Mutex::new(Resource::empty())),
         }
     }
 }
@@ -112,6 +117,21 @@ impl InMemoryLogsExporter {
             .lock()
             .map(|logs_guard| logs_guard.iter().cloned().collect())
             .map_err(LogError::from)
+    }
+
+    /// Returns the logs emitted via Logger as a vector of `LogData`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use opentelemetry_sdk::testing::logs::{InMemoryLogsExporter, InMemoryLogsExporterBuilder};
+    ///
+    /// let exporter = InMemoryLogsExporterBuilder::default().build();
+    /// let emitted_logs = exporter.get_emitted_logs().unwrap();
+    /// ```
+    ///
+    pub fn get_resource(&self) -> Resource {
+        self.resource.lock().unwrap().clone()
     }
 
     /// Clears the internal (in-memory) storage of logs.
@@ -142,6 +162,11 @@ impl LogExporter for InMemoryLogsExporter {
             .map(|mut logs_guard| logs_guard.append(&mut batch.clone()))
             .map_err(LogError::from)
     }
+
+    fn set_resource(&mut self, resource: crate::Resource) {
+        *self.resource.lock().unwrap() = resource;
+    }
+
     fn shutdown(&mut self) {
         self.reset();
     }

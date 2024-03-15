@@ -15,14 +15,21 @@ pub use log_processor::{
 mod tests {
     use super::*;
     use crate::testing::logs::InMemoryLogsExporter;
+    use crate::Resource;
     use opentelemetry::logs::{LogRecord, Logger, LoggerProvider as _, Severity};
-    use opentelemetry::{logs::AnyValue, Key};
+    use opentelemetry::{logs::AnyValue, Key, KeyValue};
 
     #[test]
     fn logging_sdk_test() {
         // Arrange
         let exporter: InMemoryLogsExporter = InMemoryLogsExporter::default();
         let logger_provider = LoggerProvider::builder()
+            .with_config(
+                Config::default().with_resource(Resource::new(vec![KeyValue::new(
+                    "service.name",
+                    "log-test",
+                )])),
+            )
             .with_log_processor(SimpleLogProcessor::new(Box::new(exporter.clone())))
             .build();
 
@@ -39,6 +46,9 @@ mod tests {
         logger.emit(log_record);
 
         // Assert
+        let exported_resource = exporter.get_resource();
+        assert!(!exported_resource.is_empty());
+
         let exported_logs = exporter
             .get_emitted_logs()
             .expect("Logs are expected to be exported.");
