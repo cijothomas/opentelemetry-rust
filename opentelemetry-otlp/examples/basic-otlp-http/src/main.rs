@@ -6,7 +6,7 @@ use opentelemetry::{
     Key, KeyValue,
 };
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{Protocol, WithExportConfig};
 use opentelemetry_sdk::trace as sdktrace;
 use opentelemetry_sdk::{
     logs::{self as sdklogs, Config},
@@ -49,16 +49,12 @@ fn init_tracer() -> Result<sdktrace::Tracer, TraceError> {
 }
 
 fn init_metrics() -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, MetricsError> {
-    let export_config = opentelemetry_otlp::ExportConfig {
-        endpoint: "http://localhost:4318/v1/metrics".to_string(),
-        ..opentelemetry_otlp::ExportConfig::default()
-    };
     let provider = opentelemetry_otlp::new_pipeline()
         .metrics(opentelemetry_sdk::runtime::Tokio)
         .with_exporter(
             opentelemetry_otlp::new_exporter()
                 .http()
-                .with_export_config(export_config),
+                .with_endpoint("http://localhost:4318/v1/metrics"),
         )
         .with_resource(RESOURCE.clone())
         .build();
