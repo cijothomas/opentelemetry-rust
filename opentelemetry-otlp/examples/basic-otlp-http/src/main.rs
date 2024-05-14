@@ -31,7 +31,6 @@ fn init_logs() -> Result<sdklogs::LoggerProvider, opentelemetry::logs::LogError>
         .with_exporter(
             opentelemetry_otlp::new_exporter()
                 .http()
-                .with_protocol(Protocol::HttpBinary)
                 .with_endpoint("http://localhost:4318/v1/logs"),
         )
         .install_batch(opentelemetry_sdk::runtime::Tokio)
@@ -43,7 +42,6 @@ fn init_tracer() -> Result<sdktrace::Tracer, TraceError> {
         .with_exporter(
             opentelemetry_otlp::new_exporter()
                 .http()
-                .with_protocol(Protocol::HttpBinary)
                 .with_endpoint("http://localhost:4318/v1/traces"),
         )
         .with_trace_config(sdktrace::config().with_resource(RESOURCE.clone()))
@@ -56,7 +54,6 @@ fn init_metrics() -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, Metric
         .with_exporter(
             opentelemetry_otlp::new_exporter()
                 .http()
-                .with_protocol(Protocol::HttpBinary)
                 .with_endpoint("http://localhost:4318/v1/metrics"),
         )
         .with_resource(RESOURCE.clone())
