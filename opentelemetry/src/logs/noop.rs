@@ -57,6 +57,8 @@ impl LogRecord for NoopLogRecord {
     #[inline]
     fn set_body(&mut self, _body: AnyValue) {}
     #[inline]
+    fn set_attributes(&mut self, _attributes: Vec<(Key, AnyValue)>) {}
+    #[inline]
     fn add_attributes<I, K, V>(&mut self, _attributes: I)
     where
         I: IntoIterator<Item = (K, V)>,

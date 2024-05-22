@@ -25,6 +25,9 @@ pub trait LogRecord {
     /// Sets the message body of the log.
     fn set_body(&mut self, body: AnyValue);
 
+    /// Sets the attributes of the log.
+    fn set_attributes(&mut self, attributes: Vec<(Key, AnyValue)>);
+
     /// Adds multiple attributes.
     fn add_attributes<I, K, V>(&mut self, attributes: I)
     where

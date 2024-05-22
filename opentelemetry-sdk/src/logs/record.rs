@@ -62,6 +62,11 @@ impl opentelemetry::logs::LogRecord for LogRecord {
         self.body = Some(body);
     }
 
+    fn set_attributes(&mut self, attributes: Vec<(Key, AnyValue)>)
+    {
+        self.attributes = Some(attributes);
+    }
+
     fn add_attributes<I, K, V>(&mut self, attributes: I)
     where
         I: IntoIterator<Item = (K, V)>,
