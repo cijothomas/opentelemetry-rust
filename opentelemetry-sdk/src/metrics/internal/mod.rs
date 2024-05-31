@@ -2,7 +2,7 @@ mod aggregate;
 mod exponential_histogram;
 mod histogram;
 mod last_value;
-mod sum;
+pub(crate) mod sum;
 
 use core::fmt;
 use std::ops::{Add, AddAssign, Sub};

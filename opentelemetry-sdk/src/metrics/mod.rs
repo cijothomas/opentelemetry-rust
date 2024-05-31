@@ -159,6 +159,16 @@ mod tests {
     // be able to make progress!
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn cijo() {
+        // Arrange 
+        let test_context = TestContext::new(Temporality::Delta);
+        let counter = test_context.u64_counter("test", "my_counter", None);
+        for v in 0..2000 {
+            counter.add(100, &[KeyValue::new("A", v.to_string())]);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn counter_overflow_delta() {
         // Arrange
         let mut test_context = TestContext::new(Temporality::Delta);

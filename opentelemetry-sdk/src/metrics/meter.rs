@@ -4,10 +4,7 @@ use std::{any::Any, borrow::Cow, collections::HashSet, sync::Arc};
 use opentelemetry::{
     global,
     metrics::{
-        noop::{NoopAsyncInstrument, NoopRegistration},
-        AsyncInstrument, Callback, CallbackRegistration, Counter, Gauge, Histogram,
-        InstrumentProvider, MetricsError, ObservableCounter, ObservableGauge,
-        ObservableUpDownCounter, Observer as ApiObserver, Result, UpDownCounter,
+        noop::{NoopAsyncInstrument, NoopRegistration}, AsyncInstrument, Callback, CallbackRegistration, Counter, Gauge, Histogram, InstrumentProvider, MetricsError, ObservableCounter, ObservableGauge, ObservableUpDownCounter, Observer as ApiObserver, Result, SyncCounter, UpDownCounter
     },
     KeyValue,
 };
@@ -20,6 +17,8 @@ use crate::metrics::{
     internal::{self, Number},
     pipeline::{Pipelines, Resolver},
 };
+
+use super::{internal::sum::Sum, AttributeSet};
 
 // maximum length of instrument name
 const INSTRUMENT_NAME_MAX_LENGTH: usize = 255;
@@ -78,18 +77,34 @@ impl SdkMeter {
     }
 }
 
+pub(crate) struct SdkCounter<T: Number<T>> {
+    sum : Sum<T>
+}
+
+impl<T: Copy + 'static + Number<T>> SyncCounter<T> for SdkCounter<T> {
+    fn add(&self, val: T, attrs: &[KeyValue]) {
+        self.sum.measure(val, AttributeSet::from(attrs))
+    }
+}
+
 #[doc(hidden)]
 impl InstrumentProvider for SdkMeter {
     fn u64_counter(
         &self,
         name: Cow<'static, str>,
-        description: Option<Cow<'static, str>>,
+        _description: Option<Cow<'static, str>>,
         unit: Option<Cow<'static, str>>,
     ) -> Result<Counter<u64>> {
         validate_instrument_config(name.as_ref(), &unit, self.validation_policy)?;
-        let p = InstrumentResolver::new(self, &self.u64_resolver);
-        p.lookup(InstrumentKind::Counter, name, description, unit)
-            .map(|i| Counter::new(Arc::new(i)))
+        // let p = InstrumentResolver::new(self, &self.u64_resolver);
+        println!("u64_counter creation..");
+        let counter = SdkCounter::<u64> {
+            sum: Sum::<u64>::new(true)
+        };
+
+        Result::Ok(Counter::new(Arc::new(counter)))
+        // p.lookup(InstrumentKind::Counter, name, description, unit)
+        //     .map(|i| Counter::new(Arc::new(i)))
     }
 
     fn f64_counter(
@@ -717,17 +732,27 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use opentelemetry::metrics::{InstrumentProvider, MeterProvider, MetricsError};
+    use opentelemetry::{metrics::{Counter, InstrumentProvider, MeterProvider, MetricsError}, KeyValue};
 
     use super::{
-        InstrumentValidationPolicy, SdkMeter, INSTRUMENT_NAME_FIRST_ALPHABETIC,
-        INSTRUMENT_NAME_INVALID_CHAR, INSTRUMENT_NAME_LENGTH, INSTRUMENT_UNIT_INVALID_CHAR,
-        INSTRUMENT_UNIT_LENGTH,
+        InstrumentValidationPolicy, SdkCounter, SdkMeter, INSTRUMENT_NAME_FIRST_ALPHABETIC, INSTRUMENT_NAME_INVALID_CHAR, INSTRUMENT_NAME_LENGTH, INSTRUMENT_UNIT_INVALID_CHAR, INSTRUMENT_UNIT_LENGTH
     };
     use crate::{
-        metrics::{pipeline::Pipelines, SdkMeterProvider},
+        metrics::{internal::sum::Sum, pipeline::Pipelines, SdkMeterProvider},
         Resource, Scope,
     };
+
+    #[test]
+    fn sum_aggregation() {
+        let counter_internal = SdkCounter::<u64> {
+            sum: Sum::<u64>::new(true)
+        };
+
+        let counter = Counter::new(Arc::new(counter_internal));
+        for v in 0..2000 {
+            counter.add(100, &[KeyValue::new("A", v.to_string())]);
+        }
+    }
 
     #[test]
     #[ignore = "See issue https://github.com/open-telemetry/opentelemetry-rust/issues/1699"]
