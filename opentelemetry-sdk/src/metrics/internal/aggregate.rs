@@ -62,7 +62,7 @@ where
     fn call(&self, dest: Option<&mut dyn Aggregation>) -> (usize, Option<Box<dyn Aggregation>>) {
         self(dest)
     }
-}
+}   
 
 /// Builds aggregate functions
 pub(crate) struct AggregateBuilder<T> {

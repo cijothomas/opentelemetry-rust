@@ -10,7 +10,7 @@
     | noop_layer_disabled         | 12 ns       |
     | noop_layer_enabled          | 25 ns       |
     | ot_layer_disabled           | 19 ns       |
-    | ot_layer_enabled            | 305 ns      |
+    | ot_layer_enabled            | 371 ns      |
 */
 
 use async_trait::async_trait;
@@ -132,8 +132,16 @@ fn benchmark_with_ot_layer(c: &mut Criterion, enabled: bool, bench_name: &str) {
         )]))
         .with_log_processor(processor)
         .build();
+    let provider2 = LoggerProvider::builder()
+    .with_resource(Resource::new(vec![KeyValue::new(
+        "service.name",
+        "benchmark",
+    )]))
+    .with_log_processor(processor)
+    .build();
     let ot_layer = tracing_layer::OpenTelemetryTracingBridge::new(&provider);
-    let subscriber = Registry::default().with(ot_layer);
+    let layer_public = tracing_layer::OpenTelemetryTracingBridge::new(&provider2);
+    let subscriber = Registry::default().with(ot_layer).with(layer_public);
 
     tracing::subscriber::with_default(subscriber, || {
         c.bench_function(bench_name, |b| {
