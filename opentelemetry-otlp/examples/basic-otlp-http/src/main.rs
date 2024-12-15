@@ -30,27 +30,27 @@ static RESOURCE: Lazy<Resource> = Lazy::new(|| {
 });
 
 fn init_logs() -> Result<sdklogs::LoggerProvider, opentelemetry_sdk::logs::LogError> {
-    let exporter = LogExporter::builder()
+    let _exporter = LogExporter::builder()
         .with_http()
         .with_endpoint("http://localhost:4318/v1/logs")
         .with_protocol(Protocol::HttpBinary)
         .build()?;
 
     Ok(LoggerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+        //.with_batch_exporter(exporter, runtime::Tokio)
         .with_resource(RESOURCE.clone())
         .build())
 }
 
 fn init_traces() -> Result<sdktrace::TracerProvider, TraceError> {
-    let exporter = SpanExporter::builder()
+    let _exporter = SpanExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary) //can be changed to `Protocol::HttpJson` to export in JSON format
         .with_endpoint("http://localhost:4318/v1/traces")
         .build()?;
 
     Ok(TracerProvider::builder()
-        .with_batch_exporter(exporter, runtime::Tokio)
+        //.with_batch_exporter(exporter, runtime::Tokio)
         .with_resource(RESOURCE.clone())
         .build())
 }
