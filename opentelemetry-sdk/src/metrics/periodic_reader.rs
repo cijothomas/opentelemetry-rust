@@ -149,7 +149,7 @@ impl PeriodicReader {
         let exporter_arc = Arc::new(exporter);
         let reader = PeriodicReader {
             inner: Arc::new(PeriodicReaderInner {
-                message_sender: Arc::new(message_sender),
+                message_sender: message_sender,
                 producer: Mutex::new(None),
                 exporter: exporter_arc.clone(),
             }),
@@ -295,7 +295,7 @@ impl fmt::Debug for PeriodicReader {
 
 struct PeriodicReaderInner {
     exporter: Arc<dyn PushMetricExporter>,
-    message_sender: Arc<mpsc::Sender<Message>>,
+    message_sender: mpsc::Sender<Message>,
     producer: Mutex<Option<Weak<dyn SdkProducer>>>,
 }
 
