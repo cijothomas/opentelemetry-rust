@@ -149,3 +149,6 @@ pub use resource::Resource;
 
 pub mod error;
 pub use error::ExportError;
+
+/// Try refactor metrics. This is temporary.
+pub mod metrics_new;
