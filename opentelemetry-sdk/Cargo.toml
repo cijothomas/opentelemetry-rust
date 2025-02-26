@@ -83,7 +83,6 @@ harness = false
 [[bench]]
 name = "trace"
 harness = false
-required-features = ["testing"]
 
 [[bench]]
 name = "log_processor"
