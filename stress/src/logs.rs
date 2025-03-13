@@ -6,11 +6,12 @@
     ~31 M/sec
 
     Hardware: AMD EPYC 7763 64-Core Processor - 2.44 GHz, 16vCPUs,
-    ~44 M /sec
+    ~51 M /sec
+    ~450 M/sec (when disabled)
 
     Hardware: Apple M4 Pro
     Total Number of Cores:	14 (10 performance and 4 efficiency)
-    ~50 M/sec
+    ~54 M/sec
     ~1.1 B/sec (when disabled)
 
     With existing SimpleLogProcessor:
