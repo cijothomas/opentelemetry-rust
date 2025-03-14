@@ -16,20 +16,18 @@
 //!   +-----+---------------+   +-----------------------+   +-------------------+
 //! ```
 
-use crate::error::{OTelSdkError, OTelSdkResult};
+use crate::error::OTelSdkResult;
 use crate::logs::log_processor::LogProcessor;
 use crate::{
     logs::{LogBatch, LogExporter, SdkLogRecord},
     Resource,
 };
 
-use opentelemetry::{otel_debug, otel_error, otel_warn, InstrumentationScope};
-
+use opentelemetry::{otel_error, otel_warn, InstrumentationScope};
 use std::fmt::Debug;
-use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 
-/// A [`LogProcessor`] designed for testing and debugging purpose, that immediately
+/// A [`LogProcessor`] designed for testing and debugging purposes that immediately
 /// exports log records as they are emitted. Log records are exported synchronously
 /// in the same thread that emits the log record.
 /// When using this processor with the OTLP Exporter, the following exporter
@@ -60,54 +58,44 @@ use std::sync::Mutex;
 ///
 #[derive(Debug)]
 pub struct SimpleLogProcessor<T: LogExporter> {
-    exporter: Mutex<T>,
-    is_shutdown: AtomicBool,
+    exporter: T,
+    export_lock: Mutex<()>,
 }
 
 impl<T: LogExporter> SimpleLogProcessor<T> {
     /// Creates a new instance of `SimpleLogProcessor`.
     pub fn new(exporter: T) -> Self {
         SimpleLogProcessor {
-            exporter: Mutex::new(exporter),
-            is_shutdown: AtomicBool::new(false),
+            exporter,
+            export_lock: Mutex::new(()),
         }
     }
 }
 
 impl<T: LogExporter> LogProcessor for SimpleLogProcessor<T> {
     fn emit(&self, record: &mut SdkLogRecord, instrumentation: &InstrumentationScope) {
-        // noop after shutdown
-        if self.is_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
-            // this is a warning, as the user is trying to log after the processor has been shutdown
-            otel_warn!(
-                name: "SimpleLogProcessor.Emit.ProcessorShutdown",
-            );
-            return;
-        }
-
-        let result = self
-            .exporter
-            .lock()
-            .map_err(|_| OTelSdkError::InternalFailure("SimpleLogProcessor mutex poison".into()))
-            .and_then(|exporter| {
-                let log_tuple = &[(record as &SdkLogRecord, instrumentation)];
-                futures_executor::block_on(exporter.export(LogBatch::new(log_tuple)))
-            });
-        // Handle errors with specific static names
-        match result {
-            Err(OTelSdkError::InternalFailure(_)) => {
-                // logging as debug as this is not a user error
-                otel_debug!(
-                    name: "SimpleLogProcessor.Emit.MutexPoisoning",
+        // Lock and synchronize so that only one export happens at a time.
+        // This is to align with the specification requirements.
+        match self.export_lock.lock() {
+            Ok(_guard) => {
+                let result = futures_executor::block_on(
+                    self.exporter
+                        .export(LogBatch::new(&[(record, instrumentation)])),
                 );
+
+                if let Err(err) = result {
+                    otel_warn!(
+                        name: "SimpleLogProcessor.Emit.ExportError",
+                        error = format!("{}", err)
+                    );
+                }
             }
             Err(err) => {
                 otel_error!(
-                    name: "SimpleLogProcessor.Emit.ExportError",
-                    error = format!("{}",err)
+                    name: "SimpleLogProcessor.Emit.LockError",
+                    error = format!("Export mutex poisoned: {}", err)
                 );
             }
-            _ => {}
         }
     }
 
@@ -116,21 +104,13 @@ impl<T: LogExporter> LogProcessor for SimpleLogProcessor<T> {
     }
 
     fn shutdown(&self) -> OTelSdkResult {
-        self.is_shutdown
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Ok(exporter) = self.exporter.lock() {
-            exporter.shutdown()
-        } else {
-            Err(OTelSdkError::InternalFailure(
-                "SimpleLogProcessor mutex poison at shutdown".into(),
-            ))
-        }
+        // Don't check if shutdown was already called, instead
+        // let the exporter handle it.
+        self.exporter.shutdown()
     }
 
     fn set_resource(&mut self, resource: &Resource) {
-        if let Ok(mut exporter) = self.exporter.lock() {
-            exporter.set_resource(resource);
-        }
+        self.exporter.set_resource(resource);
     }
 
     #[cfg(feature = "spec_unstable_logs_enabled")]
@@ -140,14 +120,9 @@ impl<T: LogExporter> LogProcessor for SimpleLogProcessor<T> {
         target: &str,
         name: Option<&str>,
     ) -> bool {
-        if let Ok(exporter) = self.exporter.lock() {
-            exporter.event_enabled(level, target, name)
-        } else {
-            true
-        }
+        self.exporter.event_enabled(level, target, name)
     }
 }
-
 #[cfg(all(test, feature = "testing", feature = "logs"))]
 mod tests {
     use crate::logs::log_processor::tests::MockLogExporter;
@@ -231,14 +206,10 @@ mod tests {
 
         processor.shutdown().unwrap();
 
-        let is_shutdown = processor
-            .is_shutdown
-            .load(std::sync::atomic::Ordering::Relaxed);
-        assert!(is_shutdown);
-
         processor.emit(&mut record, &instrumentation);
 
-        assert_eq!(1, exporter.get_emitted_logs().unwrap().len());
+        // processor does not validate if emit is called after shutdown
+        assert_eq!(2, exporter.get_emitted_logs().unwrap().len());
         assert!(exporter.is_shutdown_called());
     }
 
