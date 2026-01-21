@@ -3184,6 +3184,119 @@ mod tests {
         assert_eq!(data_point1.value, 14);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn observable_counter_selective_reporting_delta() {
+        // Run this test with stdout enabled to see output.
+        // cargo test observable_counter_selective_reporting_delta --features=testing -- --nocapture
+
+        // This test validates that when an Observable Counter callback stops reporting
+        // a particular attribute set, that attribute set is no longer exported.
+        observable_counter_selective_reporting_helper(Temporality::Delta);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn observable_counter_selective_reporting_cumulative() {
+        // Run this test with stdout enabled to see output.
+        // cargo test observable_counter_selective_reporting_cumulative --features=testing -- --nocapture
+
+        // This test validates that when an Observable Counter callback stops reporting
+        // a particular attribute set, that attribute set is no longer exported.
+        observable_counter_selective_reporting_helper(Temporality::Cumulative);
+    }
+
+    fn observable_counter_selective_reporting_helper(temporality: Temporality) {
+        // Arrange
+        let mut test_context = TestContext::new(temporality);
+
+        let call_count = Arc::new(Mutex::new(0_usize));
+        let call_count_clone = call_count.clone();
+
+        let _observable_counter = test_context
+            .meter()
+            .u64_observable_counter("my_observable_counter")
+            .with_callback(move |observer| {
+                let mut count = call_count_clone.lock().unwrap();
+                if *count == 0 {
+                    // First callback: report both A and B
+                    observer.observe(100, &[KeyValue::new("key", "A")]);
+                    observer.observe(50, &[KeyValue::new("key", "B")]);
+                } else {
+                    // Second callback onwards: report only A
+                    observer.observe(150, &[KeyValue::new("key", "A")]);
+                }
+                *count += 1;
+            })
+            .build();
+
+        // Act & Assert - First collection
+        test_context.flush_metrics();
+        let sum = test_context.get_aggregation::<u64>("my_observable_counter", None);
+        let MetricData::Sum(sum) = sum else {
+            unreachable!()
+        };
+
+        assert_eq!(
+            sum.data_points.len(),
+            2,
+            "First collection should have 2 data points"
+        );
+        let a_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "A")
+            .expect("A should be present");
+        assert_eq!(a_datapoint.value, 100);
+        let b_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "B")
+            .expect("B should be present");
+        assert_eq!(b_datapoint.value, 50);
+
+        test_context.reset_metrics();
+
+        // Act & Assert - Second collection (B not reported by callback)
+        test_context.flush_metrics();
+        let sum = test_context.get_aggregation::<u64>("my_observable_counter", None);
+        let MetricData::Sum(sum) = sum else {
+            unreachable!()
+        };
+
+        if temporality == Temporality::Delta {
+            // Delta mode: Only A should be exported since B was not reported.
+            // The value_map is cleared after each collection via collect_and_reset(),
+            // so only currently observed attribute sets are present.
+            assert_eq!(
+                sum.data_points.len(),
+                1,
+                "Delta: Second collection should have only 1 data point (A)"
+            );
+            let a_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "A")
+                .expect("A should be present");
+            assert!(
+                find_sum_datapoint_with_key_value(&sum.data_points, "key", "B").is_none(),
+                "Delta: B should NOT be exported when not reported by callback"
+            );
+            // Delta: A should be 150 - 100 = 50 (difference from previous observation)
+            assert_eq!(a_datapoint.value, 50);
+        } else {
+            // Cumulative mode: Both A and B are still exported.
+            // The value_map is NOT cleared (collect_readonly is used), so old attribute
+            // sets persist with their last observed values.
+            // Note: This behavior differs from Delta mode. The OTel spec suggests that
+            // observable instruments should only report data points with measurements
+            // recorded since the previous collection, but the current implementation
+            // retains old attribute sets in Cumulative mode.
+            assert_eq!(
+                sum.data_points.len(),
+                2,
+                "Cumulative: Second collection still has 2 data points"
+            );
+            let a_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "A")
+                .expect("A should be present");
+            // Cumulative: A should be 150 (absolute value from callback)
+            assert_eq!(a_datapoint.value, 150);
+            let b_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "B")
+                .expect("B is still present in cumulative mode");
+            // B retains its last observed value of 50
+            assert_eq!(b_datapoint.value, 50);
+        }
+    }
+
     fn find_sum_datapoint_with_key_value<'a, T>(
         data_points: &'a [SumDataPoint<T>],
         key: &str,
