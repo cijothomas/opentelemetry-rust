@@ -1465,17 +1465,18 @@ mod tests {
         // Run this test with stdout enabled to see output.
         // cargo test asynchronous_instruments_cumulative_data_points_only_from_last_measurement --features=testing -- --nocapture
 
+        // All asynchronous instruments should not emit data points if not measured.
+        // Only data points with measurements recorded since the previous collection
+        // are exported, per the OTel spec.
         asynchronous_instruments_cumulative_data_points_only_from_last_measurement_helper(
             "gauge", true,
         );
-        // TODO fix: all asynchronous instruments should not emit data points if not measured
-        // but these implementations are still buggy
         asynchronous_instruments_cumulative_data_points_only_from_last_measurement_helper(
-            "counter", false,
+            "counter", true,
         );
         asynchronous_instruments_cumulative_data_points_only_from_last_measurement_helper(
             "updown_counter",
-            false,
+            true,
         );
     }
 
@@ -3256,44 +3257,30 @@ mod tests {
             unreachable!()
         };
 
+        // Both Delta and Cumulative modes: Only A should be exported since B was not reported.
+        // The value_map is cleared after each collection via collect_and_reset(),
+        // so only currently observed attribute sets are present. This aligns with
+        // OTel spec: observable instruments should only report data points with
+        // measurements recorded since the previous collection.
+        assert_eq!(
+            sum.data_points.len(),
+            1,
+            "Second collection should have only 1 data point (A)"
+        );
+        let a_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "A")
+            .expect("A should be present");
+        assert!(
+            find_sum_datapoint_with_key_value(&sum.data_points, "key", "B").is_none(),
+            "B should NOT be exported when not reported by callback"
+        );
+
+        // Verify value follows temporality rules
         if temporality == Temporality::Delta {
-            // Delta mode: Only A should be exported since B was not reported.
-            // The value_map is cleared after each collection via collect_and_reset(),
-            // so only currently observed attribute sets are present.
-            assert_eq!(
-                sum.data_points.len(),
-                1,
-                "Delta: Second collection should have only 1 data point (A)"
-            );
-            let a_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "A")
-                .expect("A should be present");
-            assert!(
-                find_sum_datapoint_with_key_value(&sum.data_points, "key", "B").is_none(),
-                "Delta: B should NOT be exported when not reported by callback"
-            );
             // Delta: A should be 150 - 100 = 50 (difference from previous observation)
             assert_eq!(a_datapoint.value, 50);
         } else {
-            // Cumulative mode: Both A and B are still exported.
-            // The value_map is NOT cleared (collect_readonly is used), so old attribute
-            // sets persist with their last observed values.
-            // Note: This behavior differs from Delta mode. The OTel spec suggests that
-            // observable instruments should only report data points with measurements
-            // recorded since the previous collection, but the current implementation
-            // retains old attribute sets in Cumulative mode.
-            assert_eq!(
-                sum.data_points.len(),
-                2,
-                "Cumulative: Second collection still has 2 data points"
-            );
-            let a_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "A")
-                .expect("A should be present");
             // Cumulative: A should be 150 (absolute value from callback)
             assert_eq!(a_datapoint.value, 150);
-            let b_datapoint = find_sum_datapoint_with_key_value(&sum.data_points, "key", "B")
-                .expect("B is still present in cumulative mode");
-            // B retains its last observed value of 50
-            assert_eq!(b_datapoint.value, 50);
         }
     }
 
