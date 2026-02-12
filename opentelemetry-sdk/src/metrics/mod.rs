@@ -63,6 +63,11 @@ pub mod reader;
 pub(crate) mod reader;
 pub(crate) mod view;
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+mod measurement_processor;
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+pub use measurement_processor::{MeasurementProcessor, MeasurementValue};
+
 /// In-Memory metric exporter for testing purpose.
 #[cfg(any(feature = "testing", test))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "testing", test))))]
@@ -4627,6 +4632,177 @@ mod tests {
                 .collect::<Vec<_>>();
 
             result
+        }
+    }
+
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    mod measurement_processor_tests {
+        use super::*;
+        use crate::metrics::{Instrument, MeasurementProcessor, MeasurementValue};
+        use std::sync::atomic::AtomicUsize;
+
+        /// Test processor that records all measurements it observes
+        struct RecordingProcessor {
+            measurements: Mutex<Vec<(String, MeasurementValue, Vec<KeyValue>)>>,
+            call_count: AtomicUsize,
+        }
+
+        impl RecordingProcessor {
+            fn new() -> Self {
+                Self {
+                    measurements: Mutex::new(Vec::new()),
+                    call_count: AtomicUsize::new(0),
+                }
+            }
+
+            fn call_count(&self) -> usize {
+                self.call_count.load(Ordering::SeqCst)
+            }
+
+            fn measurements(&self) -> Vec<(String, MeasurementValue, Vec<KeyValue>)> {
+                self.measurements.lock().unwrap().clone()
+            }
+        }
+
+        impl MeasurementProcessor for RecordingProcessor {
+            fn process(&self, instrument: &Instrument, value: MeasurementValue, attrs: &[KeyValue]) {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                self.measurements.lock().unwrap().push((
+                    instrument.name().to_string(),
+                    value,
+                    attrs.to_vec(),
+                ));
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+        async fn measurement_processor_receives_measurements() {
+            let processor = Arc::new(RecordingProcessor::new());
+            let exporter = InMemoryMetricExporterBuilder::new()
+                .with_temporality(Temporality::Cumulative)
+                .build();
+
+            let meter_provider = SdkMeterProvider::builder()
+                .with_periodic_exporter(exporter.clone())
+                .with_measurement_processor(processor.clone())
+                .build();
+
+            let meter = meter_provider.meter("test");
+            let counter = meter.u64_counter("my_counter").build();
+
+            // Record some measurements
+            counter.add(10, &[KeyValue::new("key1", "value1")]);
+            counter.add(20, &[KeyValue::new("key2", "value2")]);
+
+            // Verify processor was called
+            assert_eq!(processor.call_count(), 2);
+
+            let measurements = processor.measurements();
+            assert_eq!(measurements.len(), 2);
+
+            // Check first measurement
+            assert_eq!(measurements[0].0, "my_counter");
+            assert_eq!(measurements[0].1, MeasurementValue::U64(10));
+            assert_eq!(measurements[0].2, vec![KeyValue::new("key1", "value1")]);
+
+            // Check second measurement
+            assert_eq!(measurements[1].0, "my_counter");
+            assert_eq!(measurements[1].1, MeasurementValue::U64(20));
+            assert_eq!(measurements[1].2, vec![KeyValue::new("key2", "value2")]);
+
+            meter_provider.shutdown().unwrap();
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+        async fn multiple_processors_called_in_order() {
+            let processor1 = Arc::new(RecordingProcessor::new());
+            let processor2 = Arc::new(RecordingProcessor::new());
+            let exporter = InMemoryMetricExporterBuilder::new()
+                .with_temporality(Temporality::Cumulative)
+                .build();
+
+            let meter_provider = SdkMeterProvider::builder()
+                .with_periodic_exporter(exporter.clone())
+                .with_measurement_processor(processor1.clone())
+                .with_measurement_processor(processor2.clone())
+                .build();
+
+            let meter = meter_provider.meter("test");
+            let counter = meter.u64_counter("my_counter").build();
+
+            counter.add(42, &[]);
+
+            // Both processors should be called
+            assert_eq!(processor1.call_count(), 1);
+            assert_eq!(processor2.call_count(), 1);
+
+            // Both should receive the same measurement
+            let m1 = processor1.measurements();
+            let m2 = processor2.measurements();
+            assert_eq!(m1[0].1, MeasurementValue::U64(42));
+            assert_eq!(m2[0].1, MeasurementValue::U64(42));
+
+            meter_provider.shutdown().unwrap();
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+        async fn processor_receives_different_value_types() {
+            let processor = Arc::new(RecordingProcessor::new());
+            let exporter = InMemoryMetricExporterBuilder::new()
+                .with_temporality(Temporality::Cumulative)
+                .build();
+
+            let meter_provider = SdkMeterProvider::builder()
+                .with_periodic_exporter(exporter.clone())
+                .with_measurement_processor(processor.clone())
+                .build();
+
+            let meter = meter_provider.meter("test");
+
+            // Test different instrument types with different value types
+            let u64_counter = meter.u64_counter("u64_counter").build();
+            let i64_counter = meter.i64_up_down_counter("i64_counter").build();
+            let f64_histogram = meter.f64_histogram("f64_histogram").build();
+
+            u64_counter.add(100, &[]);
+            i64_counter.add(-50, &[]);
+            f64_histogram.record(3.14, &[]);
+
+            assert_eq!(processor.call_count(), 3);
+
+            let measurements = processor.measurements();
+            assert_eq!(measurements[0].1, MeasurementValue::U64(100));
+            assert_eq!(measurements[1].1, MeasurementValue::I64(-50));
+            assert_eq!(measurements[2].1, MeasurementValue::F64(3.14));
+
+            meter_provider.shutdown().unwrap();
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+        async fn processor_receives_instrument_metadata() {
+            let processor = Arc::new(RecordingProcessor::new());
+            let exporter = InMemoryMetricExporterBuilder::new()
+                .with_temporality(Temporality::Cumulative)
+                .build();
+
+            let meter_provider = SdkMeterProvider::builder()
+                .with_periodic_exporter(exporter.clone())
+                .with_measurement_processor(processor.clone())
+                .build();
+
+            let meter = meter_provider.meter("test_meter");
+            let counter = meter
+                .u64_counter("my_counter")
+                .with_description("A test counter")
+                .with_unit("requests")
+                .build();
+
+            counter.add(1, &[]);
+
+            let measurements = processor.measurements();
+            assert_eq!(measurements[0].0, "my_counter");
+
+            meter_provider.shutdown().unwrap();
         }
     }
 }

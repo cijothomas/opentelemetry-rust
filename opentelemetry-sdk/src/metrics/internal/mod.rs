@@ -20,6 +20,9 @@ use opentelemetry::{otel_warn, KeyValue};
 use super::data::{AggregatedMetrics, MetricData};
 use super::pipeline::DEFAULT_CARDINALITY_LIMIT;
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+use super::MeasurementValue;
+
 // TODO Replace it with LazyLock once it is stable
 pub(crate) static STREAM_OVERFLOW_ATTRIBUTES: OnceLock<Vec<KeyValue>> = OnceLock::new();
 
@@ -268,6 +271,7 @@ pub(crate) trait AggregatedMetricsAccess: Sized {
     fn make_aggregated_metrics(data: MetricData<Self>) -> AggregatedMetrics;
 }
 
+#[cfg(not(feature = "experimental_metrics_measurement_processor"))]
 pub(crate) trait Number:
     Add<Output = Self>
     + AddAssign
@@ -283,6 +287,30 @@ pub(crate) trait Number:
     + 'static
     + AtomicallyUpdate<Self>
     + AggregatedMetricsAccess
+{
+    fn min() -> Self;
+    fn max() -> Self;
+
+    fn into_float(self) -> f64;
+}
+
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+pub(crate) trait Number:
+    Add<Output = Self>
+    + AddAssign
+    + Sub<Output = Self>
+    + PartialOrd
+    + fmt::Debug
+    + Clone
+    + Copy
+    + PartialEq
+    + Default
+    + Send
+    + Sync
+    + 'static
+    + AtomicallyUpdate<Self>
+    + AggregatedMetricsAccess
+    + Into<MeasurementValue>
 {
     fn min() -> Self;
     fn max() -> Self;

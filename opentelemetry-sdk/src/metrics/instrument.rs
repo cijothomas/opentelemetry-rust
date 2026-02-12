@@ -14,6 +14,9 @@ use super::meter::{
 
 use super::Temporality;
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+use super::{MeasurementProcessor, MeasurementValue};
+
 /// The identifier of a group of instruments that all perform the same function.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum InstrumentKind {
@@ -380,10 +383,33 @@ impl InstrumentId {
 
 pub(crate) struct ResolvedMeasures<T> {
     pub(crate) measures: Vec<Arc<dyn Measure<T>>>,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) instrument: Instrument,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) processors: Vec<Arc<dyn MeasurementProcessor>>,
 }
 
+#[cfg(not(feature = "experimental_metrics_measurement_processor"))]
 impl<T: Copy + 'static> SyncInstrument<T> for ResolvedMeasures<T> {
     fn measure(&self, val: T, attrs: &[KeyValue]) {
+        for measure in &self.measures {
+            measure.call(val, attrs)
+        }
+    }
+}
+
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+impl<T: Copy + Into<MeasurementValue> + 'static> SyncInstrument<T> for ResolvedMeasures<T> {
+    fn measure(&self, val: T, attrs: &[KeyValue]) {
+        // Invoke measurement processors first (read-only observation)
+        if !self.processors.is_empty() {
+            let measurement_value = val.into();
+            for processor in &self.processors {
+                processor.process(&self.instrument, measurement_value, attrs);
+            }
+        }
+
+        // Then perform the actual aggregation
         for measure in &self.measures {
             measure.call(val, attrs)
         }

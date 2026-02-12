@@ -18,6 +18,10 @@ use crate::metrics::{
     pipeline::{Pipelines, Resolver},
 };
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+#[allow(unused_imports)]
+use super::MeasurementProcessor;
+
 use super::noop::NoopSyncInstrument;
 
 // maximum length of instrument name
@@ -653,10 +657,31 @@ where
         unit: Option<Cow<'static, str>>,
         boundaries: Option<Vec<f64>>,
     ) -> MetricResult<ResolvedMeasures<T>> {
-        let aggregators = self.measures(kind, name, description, unit, boundaries)?;
-        Ok(ResolvedMeasures {
-            measures: aggregators,
-        })
+        let inst = Instrument {
+            name: name.clone(),
+            description: description.clone().unwrap_or_default(),
+            unit: unit.clone().unwrap_or_default(),
+            kind,
+            scope: self.meter.scope.clone(),
+        };
+
+        let aggregators = self.resolve.measures(inst.clone(), boundaries)?;
+
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        {
+            Ok(ResolvedMeasures {
+                measures: aggregators,
+                instrument: inst,
+                processors: self.resolve.measurement_processors().to_vec(),
+            })
+        }
+
+        #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
+        {
+            Ok(ResolvedMeasures {
+                measures: aggregators,
+            })
+        }
     }
 
     fn measures(

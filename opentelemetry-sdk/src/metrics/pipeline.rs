@@ -25,6 +25,9 @@ use self::internal::AggregateFns;
 
 use super::{aggregation::Aggregation, Temporality};
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+use super::MeasurementProcessor;
+
 /// Connects all of the instruments created by a meter provider to a [MetricReader].
 ///
 /// This is the object that will be registered when a meter provider is
@@ -653,10 +656,50 @@ fn is_aggregator_compatible(
 }
 
 /// The group of pipelines connecting Readers with instrument measurement.
-#[derive(Clone, Debug)]
-pub(crate) struct Pipelines(pub(crate) Vec<Arc<Pipeline>>);
+#[derive(Clone)]
+pub(crate) struct Pipelines {
+    pub(crate) pipes: Vec<Arc<Pipeline>>,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) measurement_processors: Vec<Arc<dyn MeasurementProcessor>>,
+}
+
+impl fmt::Debug for Pipelines {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("Pipelines");
+        dbg.field("pipes", &self.pipes);
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        dbg.field("measurement_processors_count", &self.measurement_processors.len());
+        dbg.finish()
+    }
+}
 
 impl Pipelines {
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) fn new(
+        res: Resource,
+        readers: Vec<Box<dyn MetricReader>>,
+        views: Vec<Arc<dyn View>>,
+        measurement_processors: Vec<Arc<dyn MeasurementProcessor>>,
+    ) -> Self {
+        let mut pipes = Vec::with_capacity(readers.len());
+        for r in readers {
+            let p = Arc::new(Pipeline {
+                resource: res.clone(),
+                reader: r,
+                views: views.clone(),
+                inner: Default::default(),
+            });
+            p.reader.register_pipeline(Arc::downgrade(&p));
+            pipes.push(p);
+        }
+
+        Pipelines {
+            pipes,
+            measurement_processors,
+        }
+    }
+
+    #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
     pub(crate) fn new(
         res: Resource,
         readers: Vec<Box<dyn MetricReader>>,
@@ -674,7 +717,7 @@ impl Pipelines {
             pipes.push(p);
         }
 
-        Pipelines(pipes)
+        Pipelines { pipes }
     }
 
     pub(crate) fn register_callback<F>(&self, callback: F)
@@ -682,7 +725,7 @@ impl Pipelines {
         F: Fn() + Send + Sync + 'static,
     {
         let cb = Arc::new(callback);
-        for pipe in &self.0 {
+        for pipe in &self.pipes {
             pipe.add_callback(cb.clone())
         }
     }
@@ -690,7 +733,7 @@ impl Pipelines {
     /// Force flush all pipelines
     pub(crate) fn force_flush(&self) -> OTelSdkResult {
         let mut errs = vec![];
-        for pipeline in &self.0 {
+        for pipeline in &self.pipes {
             if let Err(err) = pipeline.force_flush() {
                 errs.push(err);
             }
@@ -706,7 +749,7 @@ impl Pipelines {
     /// Shut down all pipelines
     pub(crate) fn shutdown(&self) -> OTelSdkResult {
         let mut errs = vec![];
-        for pipeline in &self.0 {
+        for pipeline in &self.pipes {
             if let Err(err) = pipeline.shutdown() {
                 errs.push(err);
             }
@@ -727,6 +770,8 @@ impl Pipelines {
 /// those aggregations.
 pub(crate) struct Resolver<T> {
     inserters: Vec<Inserter<T>>,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    measurement_processors: Vec<Arc<dyn MeasurementProcessor>>,
 }
 
 impl<T> Resolver<T>
@@ -738,12 +783,16 @@ where
         view_cache: Arc<Mutex<HashMap<Cow<'static, str>, InstrumentId>>>,
     ) -> Self {
         let inserters = pipelines
-            .0
+            .pipes
             .iter()
             .map(|pipe| Inserter::new(Arc::clone(pipe), Arc::clone(&view_cache)))
             .collect();
 
-        Resolver { inserters }
+        Resolver {
+            inserters,
+            #[cfg(feature = "experimental_metrics_measurement_processor")]
+            measurement_processors: pipelines.measurement_processors.clone(),
+        }
     }
 
     /// The measures that must be updated by the instrument defined by key.
@@ -770,5 +819,11 @@ where
         } else {
             Err(MetricError::Other(format!("{errs:?}")))
         }
+    }
+
+    /// Get the measurement processors.
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) fn measurement_processors(&self) -> &[Arc<dyn MeasurementProcessor>] {
+        &self.measurement_processors
     }
 }

@@ -2,6 +2,11 @@
 
 ## vNext
 
+- **(Experimental)** Add `MeasurementProcessor` for observing metrics measurements.
+  Enabled via `experimental_metrics_measurement_processor` feature flag.
+  Processors receive read-only access to measurements as they are recorded,
+  enabling use cases like exporting raw measurements to external systems (e.g., ETW).
+  [#XXXX](https://github.com/open-telemetry/opentelemetry-rust/pull/XXXX)
 - `Aggregation` enum and `StreamBuilder::with_aggregation()` are now stable and no longer require the `spec_unstable_metrics_views` feature flag.
 - Fix `service.name` Resource attribute fallback to follow OpenTelemetry
   specification by using `unknown_service:<process.executable.name>` format when
