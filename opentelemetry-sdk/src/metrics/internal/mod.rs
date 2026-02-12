@@ -272,6 +272,31 @@ pub(crate) trait AggregatedMetricsAccess: Sized {
     fn make_aggregated_metrics(data: MetricData<Self>) -> AggregatedMetrics;
 }
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+pub(crate) trait Number:
+    Add<Output = Self>
+    + AddAssign
+    + Sub<Output = Self>
+    + PartialOrd
+    + fmt::Debug
+    + Clone
+    + Copy
+    + PartialEq
+    + Default
+    + Send
+    + Sync
+    + 'static
+    + AtomicallyUpdate<Self>
+    + AggregatedMetricsAccess
+    + super::measurement_processor::IntoMeasurementValue
+{
+    fn min() -> Self;
+    fn max() -> Self;
+
+    fn into_float(self) -> f64;
+}
+
+#[cfg(not(feature = "experimental_metrics_measurement_processor"))]
 pub(crate) trait Number:
     Add<Output = Self>
     + AddAssign

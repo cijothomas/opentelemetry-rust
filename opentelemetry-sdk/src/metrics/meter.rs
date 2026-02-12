@@ -132,6 +132,14 @@ impl SdkMeter {
             return ObservableCounter::new();
         }
 
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        let inst = resolver.instrument_info(
+            InstrumentKind::ObservableCounter,
+            builder.name.clone(),
+            builder.description.clone(),
+            builder.unit.clone(),
+        );
+
         match resolver.measures(
             InstrumentKind::ObservableCounter,
             builder.name.clone(),
@@ -150,6 +158,14 @@ impl SdkMeter {
                     return ObservableCounter::new();
                 }
 
+                #[cfg(feature = "experimental_metrics_measurement_processor")]
+                let observable = Arc::new(Observable::new(
+                    ms,
+                    inst,
+                    self.pipes.measurement_processors(),
+                ));
+
+                #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
                 let observable = Arc::new(Observable::new(ms));
 
                 for callback in builder.callbacks {
@@ -191,6 +207,14 @@ impl SdkMeter {
             return ObservableUpDownCounter::new();
         }
 
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        let inst = resolver.instrument_info(
+            InstrumentKind::ObservableUpDownCounter,
+            builder.name.clone(),
+            builder.description.clone(),
+            builder.unit.clone(),
+        );
+
         match resolver.measures(
             InstrumentKind::ObservableUpDownCounter,
             builder.name.clone(),
@@ -209,6 +233,14 @@ impl SdkMeter {
                     return ObservableUpDownCounter::new();
                 }
 
+                #[cfg(feature = "experimental_metrics_measurement_processor")]
+                let observable = Arc::new(Observable::new(
+                    ms,
+                    inst,
+                    self.pipes.measurement_processors(),
+                ));
+
+                #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
                 let observable = Arc::new(Observable::new(ms));
 
                 for callback in builder.callbacks {
@@ -250,6 +282,14 @@ impl SdkMeter {
             return ObservableGauge::new();
         }
 
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        let inst = resolver.instrument_info(
+            InstrumentKind::ObservableGauge,
+            builder.name.clone(),
+            builder.description.clone(),
+            builder.unit.clone(),
+        );
+
         match resolver.measures(
             InstrumentKind::ObservableGauge,
             builder.name.clone(),
@@ -268,6 +308,14 @@ impl SdkMeter {
                     return ObservableGauge::new();
                 }
 
+                #[cfg(feature = "experimental_metrics_measurement_processor")]
+                let observable = Arc::new(Observable::new(
+                    ms,
+                    inst,
+                    self.pipes.measurement_processors(),
+                ));
+
+                #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
                 let observable = Arc::new(Observable::new(ms));
 
                 for callback in builder.callbacks {
@@ -645,6 +693,7 @@ where
     }
 
     /// lookup returns the resolved measures.
+    #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
     fn lookup(
         &self,
         kind: InstrumentKind,
@@ -656,6 +705,31 @@ where
         let aggregators = self.measures(kind, name, description, unit, boundaries)?;
         Ok(ResolvedMeasures {
             measures: aggregators,
+        })
+    }
+
+    /// lookup returns the resolved measures.
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    fn lookup(
+        &self,
+        kind: InstrumentKind,
+        name: Cow<'static, str>,
+        description: Option<Cow<'static, str>>,
+        unit: Option<Cow<'static, str>>,
+        boundaries: Option<Vec<f64>>,
+    ) -> MetricResult<ResolvedMeasures<T>> {
+        let inst = Instrument {
+            name: name.clone(),
+            description: description.clone().unwrap_or_default(),
+            unit: unit.clone().unwrap_or_default(),
+            kind,
+            scope: self.meter.scope.clone(),
+        };
+        let aggregators = self.measures(kind, name, description, unit, boundaries)?;
+        Ok(ResolvedMeasures {
+            measures: aggregators,
+            instrument: inst,
+            measurement_processors: self.meter.pipes.measurement_processors(),
         })
     }
 
@@ -676,6 +750,24 @@ where
         };
 
         self.resolve.measures(inst, boundaries)
+    }
+
+    /// Returns the Instrument info for the given parameters.
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    fn instrument_info(
+        &self,
+        kind: InstrumentKind,
+        name: Cow<'static, str>,
+        description: Option<Cow<'static, str>>,
+        unit: Option<Cow<'static, str>>,
+    ) -> Instrument {
+        Instrument {
+            name,
+            description: description.unwrap_or_default(),
+            unit: unit.unwrap_or_default(),
+            kind,
+            scope: self.meter.scope.clone(),
+        }
     }
 }
 

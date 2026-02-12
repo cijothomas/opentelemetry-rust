@@ -63,6 +63,9 @@ pub mod reader;
 pub(crate) mod reader;
 pub(crate) mod view;
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+mod measurement_processor;
+
 /// In-Memory metric exporter for testing purpose.
 #[cfg(any(feature = "testing", test))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "testing", test))))]
@@ -80,6 +83,13 @@ pub use periodic_reader::*;
 pub use pipeline::Pipeline;
 
 pub use instrument::{Instrument, InstrumentKind, Stream, StreamBuilder};
+
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(feature = "experimental_metrics_measurement_processor"))
+)]
+pub use measurement_processor::{MeasurementProcessor, MeasurementValue};
 
 use std::hash::Hash;
 
@@ -4627,6 +4637,99 @@ mod tests {
                 .collect::<Vec<_>>();
 
             result
+        }
+    }
+
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    mod measurement_processor_tests {
+        use super::*;
+        use crate::metrics::{MeasurementProcessor, MeasurementValue};
+        use std::sync::atomic::AtomicU64;
+
+        /// A simple test processor that counts measurements
+        #[derive(Debug)]
+        struct CountingProcessor {
+            u64_count: AtomicU64,
+            i64_count: AtomicU64,
+            f64_count: AtomicU64,
+        }
+
+        impl CountingProcessor {
+            fn new() -> Self {
+                Self {
+                    u64_count: AtomicU64::new(0),
+                    i64_count: AtomicU64::new(0),
+                    f64_count: AtomicU64::new(0),
+                }
+            }
+
+            fn u64_count(&self) -> u64 {
+                self.u64_count.load(Ordering::SeqCst)
+            }
+
+            fn i64_count(&self) -> u64 {
+                self.i64_count.load(Ordering::SeqCst)
+            }
+
+            fn f64_count(&self) -> u64 {
+                self.f64_count.load(Ordering::SeqCst)
+            }
+        }
+
+        impl MeasurementProcessor for CountingProcessor {
+            fn on_measurement(
+                &self,
+                _instrument: &Instrument,
+                value: MeasurementValue,
+                _attributes: &[KeyValue],
+            ) {
+                match value {
+                    MeasurementValue::U64(_) => {
+                        self.u64_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                    MeasurementValue::I64(_) => {
+                        self.i64_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                    MeasurementValue::F64(_) => {
+                        self.f64_count.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+        async fn measurement_processor_receives_measurements() {
+            // Create a processor wrapped in Arc so we can check counts after
+            let processor = Arc::new(CountingProcessor::new());
+
+            // Create meter provider with the processor
+            let exporter = InMemoryMetricExporter::default();
+            let reader = PeriodicReader::builder(exporter.clone()).build();
+            let provider = SdkMeterProvider::builder()
+                .with_reader(reader)
+                .with_measurement_processor(processor.clone())
+                .build();
+
+            let meter = provider.meter("test");
+
+            // Create instruments and record measurements
+            let u64_counter = meter.u64_counter("u64_counter").build();
+            let i64_counter = meter.i64_up_down_counter("i64_counter").build();
+            let f64_histogram = meter.f64_histogram("f64_histogram").build();
+
+            // Record measurements
+            u64_counter.add(1, &[]);
+            u64_counter.add(2, &[KeyValue::new("key", "value")]);
+            i64_counter.add(10, &[]);
+            f64_histogram.record(1.5, &[]);
+            f64_histogram.record(2.5, &[]);
+
+            // Verify processor received all measurements
+            assert_eq!(processor.u64_count(), 2, "Expected 2 u64 measurements");
+            assert_eq!(processor.i64_count(), 1, "Expected 1 i64 measurement");
+            assert_eq!(processor.f64_count(), 2, "Expected 2 f64 measurements");
+
+            provider.shutdown().unwrap();
         }
     }
 }

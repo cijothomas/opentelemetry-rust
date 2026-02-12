@@ -653,10 +653,48 @@ fn is_aggregator_compatible(
 }
 
 /// The group of pipelines connecting Readers with instrument measurement.
-#[derive(Clone, Debug)]
-pub(crate) struct Pipelines(pub(crate) Vec<Arc<Pipeline>>);
+#[derive(Clone)]
+pub(crate) struct Pipelines {
+    pub(crate) pipes: Vec<Arc<Pipeline>>,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) measurement_processors: Arc<Vec<Arc<dyn super::MeasurementProcessor>>>,
+}
+
+impl fmt::Debug for Pipelines {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Pipelines")
+            .field("pipes", &self.pipes)
+            .finish()
+    }
+}
 
 impl Pipelines {
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) fn new(
+        res: Resource,
+        readers: Vec<Box<dyn MetricReader>>,
+        views: Vec<Arc<dyn View>>,
+        measurement_processors: Vec<Arc<dyn super::MeasurementProcessor>>,
+    ) -> Self {
+        let mut pipes = Vec::with_capacity(readers.len());
+        for r in readers {
+            let p = Arc::new(Pipeline {
+                resource: res.clone(),
+                reader: r,
+                views: views.clone(),
+                inner: Default::default(),
+            });
+            p.reader.register_pipeline(Arc::downgrade(&p));
+            pipes.push(p);
+        }
+
+        Pipelines {
+            pipes,
+            measurement_processors: Arc::new(measurement_processors),
+        }
+    }
+
+    #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
     pub(crate) fn new(
         res: Resource,
         readers: Vec<Box<dyn MetricReader>>,
@@ -674,7 +712,15 @@ impl Pipelines {
             pipes.push(p);
         }
 
-        Pipelines(pipes)
+        Pipelines { pipes }
+    }
+
+    /// Returns a clone of the measurement processors.
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) fn measurement_processors(
+        &self,
+    ) -> Arc<Vec<Arc<dyn super::MeasurementProcessor>>> {
+        Arc::clone(&self.measurement_processors)
     }
 
     pub(crate) fn register_callback<F>(&self, callback: F)
@@ -682,7 +728,7 @@ impl Pipelines {
         F: Fn() + Send + Sync + 'static,
     {
         let cb = Arc::new(callback);
-        for pipe in &self.0 {
+        for pipe in &self.pipes {
             pipe.add_callback(cb.clone())
         }
     }
@@ -690,8 +736,15 @@ impl Pipelines {
     /// Force flush all pipelines
     pub(crate) fn force_flush(&self) -> OTelSdkResult {
         let mut errs = vec![];
-        for pipeline in &self.0 {
+        for pipeline in &self.pipes {
             if let Err(err) = pipeline.force_flush() {
+                errs.push(err);
+            }
+        }
+
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        for processor in self.measurement_processors.iter() {
+            if let Err(err) = processor.force_flush() {
                 errs.push(err);
             }
         }
@@ -706,8 +759,15 @@ impl Pipelines {
     /// Shut down all pipelines
     pub(crate) fn shutdown(&self) -> OTelSdkResult {
         let mut errs = vec![];
-        for pipeline in &self.0 {
+        for pipeline in &self.pipes {
             if let Err(err) = pipeline.shutdown() {
+                errs.push(err);
+            }
+        }
+
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        for processor in self.measurement_processors.iter() {
+            if let Err(err) = processor.shutdown() {
                 errs.push(err);
             }
         }
@@ -738,7 +798,7 @@ where
         view_cache: Arc<Mutex<HashMap<Cow<'static, str>, InstrumentId>>>,
     ) -> Self {
         let inserters = pipelines
-            .0
+            .pipes
             .iter()
             .map(|pipe| Inserter::new(Arc::clone(pipe), Arc::clone(&view_cache)))
             .collect();

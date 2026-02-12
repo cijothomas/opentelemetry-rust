@@ -380,8 +380,29 @@ impl InstrumentId {
 
 pub(crate) struct ResolvedMeasures<T> {
     pub(crate) measures: Vec<Arc<dyn Measure<T>>>,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) instrument: Instrument,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) measurement_processors: Arc<Vec<Arc<dyn super::MeasurementProcessor>>>,
 }
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+impl<T: super::measurement_processor::IntoMeasurementValue> SyncInstrument<T>
+    for ResolvedMeasures<T>
+{
+    fn measure(&self, val: T, attrs: &[KeyValue]) {
+        // Call measurement processors first (read-only)
+        for processor in self.measurement_processors.iter() {
+            processor.on_measurement(&self.instrument, val.into_measurement_value(), attrs);
+        }
+        // Then call the actual measures for aggregation
+        for measure in &self.measures {
+            measure.call(val, attrs)
+        }
+    }
+}
+
+#[cfg(not(feature = "experimental_metrics_measurement_processor"))]
 impl<T: Copy + 'static> SyncInstrument<T> for ResolvedMeasures<T> {
     fn measure(&self, val: T, attrs: &[KeyValue]) {
         for measure in &self.measures {
@@ -393,14 +414,50 @@ impl<T: Copy + 'static> SyncInstrument<T> for ResolvedMeasures<T> {
 #[derive(Clone)]
 pub(crate) struct Observable<T> {
     measures: Vec<Arc<dyn Measure<T>>>,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    instrument: Instrument,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    measurement_processors: Arc<Vec<Arc<dyn super::MeasurementProcessor>>>,
 }
 
 impl<T> Observable<T> {
+    #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
     pub(crate) fn new(measures: Vec<Arc<dyn Measure<T>>>) -> Self {
         Self { measures }
     }
+
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    pub(crate) fn new(
+        measures: Vec<Arc<dyn Measure<T>>>,
+        instrument: Instrument,
+        measurement_processors: Arc<Vec<Arc<dyn super::MeasurementProcessor>>>,
+    ) -> Self {
+        Self {
+            measures,
+            instrument,
+            measurement_processors,
+        }
+    }
 }
 
+#[cfg(feature = "experimental_metrics_measurement_processor")]
+impl<T: super::measurement_processor::IntoMeasurementValue> AsyncInstrument<T> for Observable<T> {
+    fn observe(&self, measurement: T, attrs: &[KeyValue]) {
+        // Call measurement processors first (read-only)
+        for processor in self.measurement_processors.iter() {
+            processor.on_measurement(
+                &self.instrument,
+                measurement.into_measurement_value(),
+                attrs,
+            );
+        }
+        for measure in &self.measures {
+            measure.call(measurement, attrs)
+        }
+    }
+}
+
+#[cfg(not(feature = "experimental_metrics_measurement_processor"))]
 impl<T: Copy + Send + Sync + 'static> AsyncInstrument<T> for Observable<T> {
     fn observe(&self, measurement: T, attrs: &[KeyValue]) {
         for measure in &self.measures {

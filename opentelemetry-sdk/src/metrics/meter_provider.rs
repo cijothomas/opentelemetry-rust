@@ -228,11 +228,24 @@ impl MeterProvider for SdkMeterProvider {
 }
 
 /// Configuration options for a [MeterProvider].
-#[derive(Default)]
 pub struct MeterProviderBuilder {
     resource: Option<Resource>,
     readers: Vec<Box<dyn MetricReader>>,
     views: Vec<Arc<dyn View>>,
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    measurement_processors: Vec<Arc<dyn super::MeasurementProcessor>>,
+}
+
+impl Default for MeterProviderBuilder {
+    fn default() -> Self {
+        Self {
+            resource: None,
+            readers: Vec::new(),
+            views: Vec::new(),
+            #[cfg(feature = "experimental_metrics_measurement_processor")]
+            measurement_processors: Vec::new(),
+        }
+    }
 }
 
 impl MeterProviderBuilder {
@@ -372,6 +385,54 @@ impl MeterProviderBuilder {
         self
     }
 
+    /// Adds a [`MeasurementProcessor`] to the [MeterProvider].
+    ///
+    /// Measurement processors receive read-only access to every measurement
+    /// recorded by any instrument. This is useful for:
+    ///
+    /// - Exporting raw measurements to external systems (e.g., ETW)
+    /// - Debugging and logging measurement flow
+    /// - Real-time monitoring on individual measurements
+    ///
+    /// # Note
+    ///
+    /// Processors are called synchronously on the hot path. Keep implementations
+    /// fast and non-blocking.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use opentelemetry_sdk::metrics::{SdkMeterProvider, MeasurementProcessor, MeasurementValue, Instrument};
+    /// use opentelemetry::KeyValue;
+    ///
+    /// #[derive(Debug)]
+    /// struct MyProcessor;
+    ///
+    /// impl MeasurementProcessor for MyProcessor {
+    ///     fn on_measurement(&self, instrument: &Instrument, value: MeasurementValue, attrs: &[KeyValue]) {
+    ///         // Handle measurement
+    ///     }
+    /// }
+    ///
+    /// let provider = SdkMeterProvider::builder()
+    ///     .with_measurement_processor(MyProcessor)
+    ///     .build();
+    /// ```
+    ///
+    /// [`MeasurementProcessor`]: super::MeasurementProcessor
+    #[cfg(feature = "experimental_metrics_measurement_processor")]
+    #[cfg_attr(
+        docsrs,
+        doc(cfg(feature = "experimental_metrics_measurement_processor"))
+    )]
+    pub fn with_measurement_processor<T>(mut self, processor: T) -> Self
+    where
+        T: super::MeasurementProcessor + 'static,
+    {
+        self.measurement_processors.push(Arc::new(processor));
+        self
+    }
+
     /// Construct a new [MeterProvider] with this configuration.
     pub fn build(self) -> SdkMeterProvider {
         otel_debug!(
@@ -379,13 +440,24 @@ impl MeterProviderBuilder {
             builder = format!("{:?}", &self),
         );
 
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        let pipes = Pipelines::new(
+            self.resource.unwrap_or(Resource::builder().build()),
+            self.readers,
+            self.views,
+            self.measurement_processors,
+        );
+
+        #[cfg(not(feature = "experimental_metrics_measurement_processor"))]
+        let pipes = Pipelines::new(
+            self.resource.unwrap_or(Resource::builder().build()),
+            self.readers,
+            self.views,
+        );
+
         let meter_provider = SdkMeterProvider {
             inner: Arc::new(SdkMeterProviderInner {
-                pipes: Arc::new(Pipelines::new(
-                    self.resource.unwrap_or(Resource::builder().build()),
-                    self.readers,
-                    self.views,
-                )),
+                pipes: Arc::new(pipes),
                 meters: Default::default(),
                 shutdown_invoked: AtomicBool::new(false),
             }),
@@ -400,11 +472,16 @@ impl MeterProviderBuilder {
 
 impl fmt::Debug for MeterProviderBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MeterProviderBuilder")
+        let mut debug = f.debug_struct("MeterProviderBuilder");
+        debug
             .field("resource", &self.resource)
             .field("readers", &self.readers)
-            .field("views", &self.views.len())
-            .finish()
+            .field("views", &self.views.len());
+
+        #[cfg(feature = "experimental_metrics_measurement_processor")]
+        debug.field("measurement_processors", &self.measurement_processors.len());
+
+        debug.finish()
     }
 }
 #[cfg(all(test, feature = "testing"))]
@@ -427,7 +504,7 @@ mod tests {
                                resource_key: &'static str,
                                expect: Option<&'static str>| {
             assert_eq!(
-                provider.inner.pipes.0[0]
+                provider.inner.pipes.pipes[0]
                     .resource
                     .get(&Key::from_static_str(resource_key))
                     .map(|v| v.to_string()),
@@ -436,19 +513,19 @@ mod tests {
         };
         let assert_telemetry_resource = |provider: &super::SdkMeterProvider| {
             assert_eq!(
-                provider.inner.pipes.0[0]
+                provider.inner.pipes.pipes[0]
                     .resource
                     .get(&TELEMETRY_SDK_LANGUAGE.into()),
                 Some(Value::from("rust"))
             );
             assert_eq!(
-                provider.inner.pipes.0[0]
+                provider.inner.pipes.pipes[0]
                     .resource
                     .get(&TELEMETRY_SDK_NAME.into()),
                 Some(Value::from("opentelemetry"))
             );
             assert_eq!(
-                provider.inner.pipes.0[0]
+                provider.inner.pipes.pipes[0]
                     .resource
                     .get(&TELEMETRY_SDK_VERSION.into()),
                 Some(Value::from(env!("CARGO_PKG_VERSION")))
@@ -461,7 +538,7 @@ mod tests {
             let default_meter_provider = super::SdkMeterProvider::builder()
                 .with_reader(reader)
                 .build();
-            let service_name = default_meter_provider.inner.pipes.0[0]
+            let service_name = default_meter_provider.inner.pipes.pipes[0]
                 .resource
                 .get(&Key::from_static_str(SERVICE_NAME))
                 .map(|v| v.to_string())
@@ -485,7 +562,7 @@ mod tests {
             )
             .build();
         assert_resource(&custom_meter_provider, SERVICE_NAME, Some("test_service"));
-        assert_eq!(custom_meter_provider.inner.pipes.0[0].resource.len(), 1);
+        assert_eq!(custom_meter_provider.inner.pipes.pipes[0].resource.len(), 1);
 
         temp_env::with_var(
             "OTEL_RESOURCE_ATTRIBUTES",
@@ -496,7 +573,7 @@ mod tests {
                 let env_resource_provider = super::SdkMeterProvider::builder()
                     .with_reader(reader3)
                     .build();
-                let service_name = env_resource_provider.inner.pipes.0[0]
+                let service_name = env_resource_provider.inner.pipes.pipes[0]
                     .resource
                     .get(&Key::from_static_str(SERVICE_NAME))
                     .map(|v| v.to_string())
@@ -509,7 +586,7 @@ mod tests {
                 assert_resource(&env_resource_provider, "key1", Some("value1"));
                 assert_resource(&env_resource_provider, "k3", Some("value2"));
                 assert_telemetry_resource(&env_resource_provider);
-                assert_eq!(env_resource_provider.inner.pipes.0[0].resource.len(), 6);
+                assert_eq!(env_resource_provider.inner.pipes.pipes[0].resource.len(), 6);
             },
         );
 
@@ -530,7 +607,7 @@ mod tests {
                             .build(),
                     )
                     .build();
-                let service_name = user_provided_resource_config_provider.inner.pipes.0[0]
+                let service_name = user_provided_resource_config_provider.inner.pipes.pipes[0]
                     .resource
                     .get(&Key::from_static_str(SERVICE_NAME))
                     .map(|v| v.to_string())
@@ -557,7 +634,7 @@ mod tests {
                 );
                 assert_telemetry_resource(&user_provided_resource_config_provider);
                 assert_eq!(
-                    user_provided_resource_config_provider.inner.pipes.0[0]
+                    user_provided_resource_config_provider.inner.pipes.pipes[0]
                         .resource
                         .len(),
                     7
@@ -572,7 +649,7 @@ mod tests {
             .with_resource(Resource::empty())
             .build();
 
-        assert_eq!(no_service_name.inner.pipes.0[0].resource.len(), 0)
+        assert_eq!(no_service_name.inner.pipes.pipes[0].resource.len(), 0)
     }
 
     #[test]
