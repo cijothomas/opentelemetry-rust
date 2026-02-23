@@ -10,6 +10,7 @@ Reduce span-start overhead by avoiding pre-sampling container allocations while 
 - [x] Focus on container-level overhead (`SpanBuilder`, links/events path).
 - [x] Use a borrow-first `SpanBuilder<'a>` model.
 - [x] Remove pre-start events from builder path.
+- [ ] Evaluate full `Span` events API removal in a future major phase (after deprecation/migration path is ready).
 - [ ] Revisit `KeyValue` ownership model in a separate future effort.
 
 ## Proposed API shape (target)
@@ -98,6 +99,11 @@ pub trait Tracer {
 - Redesigning `KeyValue` / `Value` ownership model.
 - Accepting non-`'static` borrowed string values directly in `KeyValue`.
 - Full zero-copy attribute-value representation.
+- Removing `Span::add_event` / `Span` events API in this phase.
+
+## Future consideration (separate track)
+
+- [ ] Define a staged deprecation/removal plan for `Span` events API (`add_event`, `add_event_with_timestamp`, `record_error` behavior), including migration guidance and compatibility strategy.
 
 ## Recommendation
 
