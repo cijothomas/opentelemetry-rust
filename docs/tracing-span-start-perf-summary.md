@@ -10,6 +10,7 @@ Reduce span-start overhead by avoiding pre-sampling container allocations while 
 - [x] Focus on container-level overhead (`SpanBuilder`, links/events path).
 - [x] Use a borrow-first `SpanBuilder<'a>` model.
 - [x] Remove pre-start events from builder path.
+- [x] Move limit/validation policy decisions for events/links out of API and into SDK.
 - [ ] Evaluate full `Span` events API removal in a future major phase (after deprecation/migration path is ready).
 - [ ] Revisit `KeyValue` ownership model in a separate future effort.
 
@@ -50,6 +51,14 @@ pub trait Tracer {
 - [ ] Add conversion path from `LinkRef<'a>` to owned internal link data.
 - [ ] Add unit tests for conversion and limits behavior.
 
+### PR 2.5 — API policy leakage cleanup (events/links)
+
+- [ ] Remove `dropped_attributes_count` from `opentelemetry::trace::Event` public API.
+- [ ] Remove `dropped_attributes_count` from `opentelemetry::trace::Link` public API.
+- [ ] Keep dropped counts in SDK/internal/export paths only.
+- [ ] Stop API-side filtering of invalid links in `SpanBuilder::with_links` (move validation/handling to SDK).
+- [ ] Add/adjust tests to ensure SDK still enforces limits and exports dropped counts correctly.
+
 ### PR 3 — Introduce borrow-first `SpanBuilder<'a>` (additive)
 
 - [ ] Add lifetime-parameterized `SpanBuilder<'a>`.
@@ -61,6 +70,7 @@ pub trait Tracer {
 - [ ] Update SDK start path to sample on borrowed builder input.
 - [ ] Clone/normalize/truncate only on `RecordOnly` / `RecordAndSample`.
 - [ ] Ensure drop path avoids unnecessary owned conversion.
+- [ ] Micro-optimize recording path merges to avoid push-then-truncate work (respect remaining attribute capacity before appending sampler attributes).
 - [ ] Add tests for no-conversion-on-drop behavior.
 
 ### PR 5 — Remove pre-start events from builder path
@@ -100,6 +110,11 @@ pub trait Tracer {
 - Accepting non-`'static` borrowed string values directly in `KeyValue`.
 - Full zero-copy attribute-value representation.
 - Removing `Span::add_event` / `Span` events API in this phase.
+
+## API policy boundary rule (for this work)
+
+- API crate defines shape and ergonomics.
+- SDK crate enforces limits, validation, truncation, and dropped-count bookkeeping.
 
 ## Future consideration (separate track)
 
