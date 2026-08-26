@@ -96,7 +96,8 @@ The SDK lives in [opentelemetry_sdk::metrics](../../opentelemetry-sdk/src/metric
   `meter_with_scope(...)` calls return the same `SdkMeter` rather than
   building a new aggregation pipeline.
 - `shutdown()` and `force_flush()` take `&self` and delegate to each reader;
-  shutdown is idempotent and guarded by an `AtomicBool`. `Drop` invokes
+  shutdown is guarded by an `AtomicBool`, so only the first call performs the
+  operation and subsequent calls return `AlreadyShutdown`. `Drop` invokes
   shutdown if the user did not.
 
 ### `SdkMeter` and instrument construction
@@ -211,16 +212,23 @@ than the sharding PRs above and has not been prototyped end-to-end.
 For now, the recommended workaround for known hot counters is bound
 instruments, which sidestep the lookup entirely. Applications that genuinely
 need many cores updating the same unbound instrument can also fall back to a
-per-thread `MeterProvider` pattern, at the cost of duplicating exporter
-state.
+per-thread `MeterProvider` pattern. The `metrics_histogram` harness under
+[stress/src/metrics_histogram.rs](../../stress/src/metrics_histogram.rs)
+compares a shared provider with this pattern directly via its `--per-thread`
+mode. This removes cross-thread aggregation contention, but creates independent
+pipelines and readers per thread; the harness uses `ManualReader`, so
+applications should account for the cost of duplicating any configured exporters
+before adopting the pattern.
 
 ### Asynchronous instruments
 
 For `ObservableCounter` and friends, the user-supplied callback is invoked by
-the `MetricReader` at collection time, inside a context-suppressed scope so
-the callback's own instrumentation does not feed back into the pipeline. The
-callback writes measurements into the same `ValueMap` machinery as the sync
-path — there is no separate storage.
+the `MetricReader` at collection time. `PeriodicReader` invokes callbacks on
+its context-suppressed worker thread, but the `MetricReader` contract itself
+does not guarantee suppression: `ManualReader` and the Prometheus exporter run
+callbacks on the thread that initiated collection. The callback writes
+measurements into the same `ValueMap` machinery as the sync path — there is no
+separate storage.
 
 ## Bound Instruments (experimental)
 
@@ -269,13 +277,16 @@ serves it on demand to an external scraper.
 
 - `PeriodicReader` runs on a dedicated background thread, collects on a
   configurable interval (default 60s, also overridable via
-  `OTEL_METRIC_EXPORT_INTERVAL_MILLIS`), and calls the exporter
-  synchronously. Time spent exporting is not counted against the interval.
+  `OTEL_METRIC_EXPORT_INTERVAL`), and calls the exporter synchronously. It
+  targets the configured interval between scheduled collection starts by
+  subtracting collection and export time from the next wait; if that work takes
+  longer than the interval, the next collection starts immediately.
   Used with OTLP, stdout, and in-memory exporters.
 - The Prometheus exporter is a `MetricReader` that does not push at all;
-  it triggers collection inline when its HTTP handler is called, so the
-  scrape itself drives the read of the `ValueMap`s. There is no background
-  thread and no configurable interval — cadence is set by the scraper.
+  its registered `prometheus::core::Collector` triggers collection when the
+  registry is gathered, typically by an application-owned HTTP scrape handler.
+  The crate does not host a `/metrics` endpoint. There is no background thread
+  and no configurable interval — cadence is set by the scraper.
 - The collector pulls from each `ValueMap` under a short read/write lock and
   emits either `Cumulative` or `Delta` data depending on the configured
   temporality. For `Delta`, only trackers whose `has_been_updated` flag is
@@ -283,13 +294,13 @@ serves it on demand to an external scraper.
 
 Built-in exporters:
 
-1. **InMemoryExporter** — stores `ResourceMetrics` in a `VecDeque`, used
+1. **InMemoryMetricExporter** — stores `ResourceMetrics` in a `VecDeque`, used
    extensively for tests.
 2. **Stdout exporter** — debug/learning only; format is not stable.
 3. **OTLP exporter** — production exporter, gRPC or HTTP, in
    `opentelemetry-otlp`.
-4. **Prometheus exporter** — pull-based, exposes a `/metrics` endpoint, in
-   the `opentelemetry-prometheus` crate.
+4. **Prometheus exporter** — pull-based, provides a collector that applications
+  register with a Prometheus registry, in the `opentelemetry-prometheus` crate.
 
 ## Self-observability
 
