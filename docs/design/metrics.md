@@ -25,8 +25,9 @@ choose instruments, attributes, and cardinality limits lives in
 
 ## Key Design Principles
 
-- High performance — a single `Counter::add(...)` is a hash lookup plus a
-  lock-free atomic increment.
+- High performance — on the common attributed path without a `View` attribute
+  filter, `Counter::add(...)` is a hash lookup plus a lock-free atomic value
+  update and an update-flag store.
 - Capped resource (memory) usage — every aggregation stream has a cardinality
   limit; overflow is folded into a single overflow series.
 - Pre-aggregation in-process — the SDK never buffers raw measurements; it
@@ -162,19 +163,22 @@ collection. The key tricks on the write path are:
    across the lookup, never across the update.
 
 The net effect: for sum and gauge instruments the common case — known
-attribute set, known order — is a read-locked hash lookup followed by a
-single atomic increment. No copying, no sorting, no allocation. Histograms
-add a short per-tracker `Mutex` on top of the same lookup.
+attribute set, known order — is a read-locked hash lookup followed by an
+atomic value update and a store marking the tracker as updated. No copying,
+sorting, or allocation occurs inside `ValueMap`. A configured `View` attribute
+filter currently builds a filtered `Vec<KeyValue>` before this lookup and
+therefore adds a per-measurement allocation. Histograms add a short per-tracker
+`Mutex` on top of the same lookup.
 
 ### Cardinality limits and overflow
 
 Every stream has a cardinality cap (default 2000, configurable per-instrument
-via `View` / `Stream`). Once the map is at the limit, the next never-seen
-attribute set does **not** allocate a new tracker; instead its measurement is
-folded into a single overflow tracker keyed by `otel.metric.overflow = true`.
-This bounds memory under cardinality explosions and, importantly, keeps the
-hot path's worst case at "two hash misses then write to the overflow
-tracker" — it never degenerates into unbounded growth.
+via `View` / `Stream`). Once the map is at the limit, a never-seen attribute
+set does not receive its own tracker; its measurement is folded into a single,
+lazily created overflow tracker keyed by `otel.metric.overflow = true`. This
+bounds memory under cardinality explosions and, importantly, keeps the hot
+path's worst case at "two hash misses then write to the overflow tracker" — it
+never degenerates into unbounded growth.
 
 ### Contention
 
@@ -238,16 +242,16 @@ Gated under the `experimental_metrics_bound_instruments` feature on both
 `counter.bind(&attrs)`.
 
 The motivation is the per-call cost of the unbound hot path. Even at its
-fastest — one hash lookup plus one atomic increment — it is ~50 ns per call
-on commodity hardware (measured on Apple M4 Pro). Most of that is the
-attribute lookup; the atomic is essentially free.
+fastest — one hash lookup plus atomic updates — it is ~50 ns per call in the
+SDK benchmark on an Apple M4 Max. Most of that is the attribute lookup.
 
 `bind(&attrs)` walks the unbound path **once** to resolve the
 `Arc<TrackerEntry>`, and returns a handle that holds it directly. From then
-on, `bound.add(1)` is just the atomic increment — about **1.8 ns** on the
-same hardware, ~27× faster than the unbound call. If the bind happens after
-the cardinality limit is reached, the handle points at the overflow tracker,
-so the perf contract holds regardless of cardinality state.
+on, `bound.add(1)` performs the atomic value update and update-flag store
+without a map lookup — about **1.9 ns** on the same hardware, ~26× faster than
+the unbound call. If the bind happens after the cardinality limit is reached,
+the handle points at the overflow tracker, so the perf contract holds
+regardless of cardinality state.
 
 This makes bound instruments the practical substrate for hot-path
 self-diagnostics — counters that are touched per log record or per export —
@@ -255,10 +259,11 @@ which is why
 [observability.md](observability.md) requires this feature to enable SDK
 self-metrics.
 
-The feature is experimental because the API shape (ergonomics of `bind` /
-how bound handles interact with `View`s and cardinality) is still settling
-in the [specification](https://github.com/open-telemetry/opentelemetry-specification);
-the underlying mechanism is stable.
+The feature implements the specification's experimental bound-instrument
+requirements. Its API and implementation may still change as language SDKs
+gain experience with ergonomics, `View` interaction, and cardinality behavior;
+see the merged experimental proposal
+([open-telemetry/opentelemetry-specification#5050](https://github.com/open-telemetry/opentelemetry-specification/pull/5050)).
 
 ## Views
 
@@ -267,7 +272,9 @@ A `View` is a function `&Instrument -> Option<Stream>` registered on the
 override its aggregation (e.g. force a `Histogram` to use explicit boundaries
 or change a `Counter` to drop), filter its attributes down to a smaller set
 (reducing cardinality), or tighten its cardinality limit. View matching
-happens once at instrument creation, not on the hot path.
+happens once at instrument creation, not on the hot path. However, an attribute
+filter selected by the view is applied to every measurement and currently
+allocates a filtered attribute vector before aggregation lookup.
 
 ## MetricReaders and Exporters
 
@@ -325,6 +332,8 @@ counter incremented on every `emit()` would be too expensive otherwise.
 - Cardinality is bounded per stream by folding overflow into a single
   series, keeping memory and worst-case latency predictable.
 - Bound instruments resolve the attribute lookup once and turn subsequent
-  updates into a single atomic — the basis for hot-path self-diagnostics.
+  updates into direct aggregator operations — atomic for sum and last-value
+  aggregations, and `Mutex`-protected for histogram aggregations — which is the
+  basis for hot-path self-diagnostics.
 - `MetricReader`s collect on a schedule and hand off to OTLP, Prometheus,
   stdout, or in-memory exporters.
